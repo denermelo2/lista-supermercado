@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -7,8 +6,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Minus, ShoppingCart, Check, X, User } from 'lucide-react';
+import { Plus, Minus, ShoppingCart, Check, X, User, List, Save, Edit, Trash2, Share2 } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
 
 interface Category {
   id: string;
@@ -40,6 +50,7 @@ interface ShoppingListType {
   is_completed: boolean;
   completion_date?: string;
   store_name?: string;
+  created_at: string;
 }
 
 // Função para capitalizar a primeira letra de cada palavra
@@ -83,6 +94,9 @@ const detectCategory = (productName: string, categories: Category[]): string | n
   return merceariaCategory?.id || null;
 };
 
+// Função utilitária para normalizar strings (remover acentos e padronizar case)
+const normalize = (str: string) => str.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
 const ShoppingList = () => {
   const [currentList, setCurrentList] = useState<ShoppingListType | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -91,6 +105,20 @@ const ShoppingList = () => {
   const [showCompleteForm, setShowCompleteForm] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [showCategorySelect, setShowCategorySelect] = useState(false);
+  const [manualCategory, setManualCategory] = useState<string | null>(null);
+  const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
+  const [isLoadingList, setIsLoadingList] = useState(true);
+  const [showListsMenu, setShowListsMenu] = useState(false);
+  const [userLists, setUserLists] = useState<ShoppingListType[]>([]);
+  const [editingListId, setEditingListId] = useState<string | null>(null);
+  const [editingListName, setEditingListName] = useState('');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveAction, setSaveAction] = useState<'nova' | 'existente' | null>(null);
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [globalResults, setGlobalResults] = useState<Product[]>([]);
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Buscar categorias
   const { data: categories = [] } = useQuery({
@@ -121,17 +149,14 @@ const ShoppingList = () => {
     enabled: !!selectedCategory
   });
 
-  // Buscar lista atual
+  // Buscar itens da lista atual
   const { data: listItems = [] } = useQuery({
     queryKey: ['listItems', currentList?.id],
     queryFn: async () => {
       if (!currentList?.id) return [];
       const { data, error } = await supabase
         .from('list_items')
-        .select(`
-          *,
-          product:products(*)
-        `)
+        .select(`*, product:products(*)`)
         .eq('list_id', currentList.id)
         .order('created_at');
       if (error) throw error;
@@ -140,10 +165,136 @@ const ShoppingList = () => {
     enabled: !!currentList?.id
   });
 
-  // Criar nova lista ao carregar a página
+  // Buscar listas do usuário logado
+  const fetchUserLists = async () => {
+    const user = await supabase.auth.getUser();
+    if (!user?.data?.user) return;
+    const { data, error } = await supabase
+      .from('shopping_lists')
+      .select('*')
+      .eq('user_id', user.data.user.id)
+      .order('created_at', { ascending: false });
+    if (!error && data) setUserLists(data);
+  };
+
+  // Busca global de produtos
   useEffect(() => {
-    createNewList();
+    if (!globalSearch.trim()) {
+      setGlobalResults([]);
+      return;
+    }
+    (async () => {
+      const { data } = await supabase
+        .from('products')
+        .select('*')
+        .ilike('name', `%${globalSearch.trim()}%`);
+      setGlobalResults(data || []);
+    })();
+  }, [globalSearch]);
+
+  // Salvar lista (atualizar nome, garantir user_id) usando modal
+  const handleSaveList = () => setShowSaveDialog(true);
+  const handleSaveDialogAction = async (action: 'nova' | 'existente') => {
+    setShowSaveDialog(false);
+    setSaveAction(null);
+    const user = await supabase.auth.getUser();
+    if (!user?.data?.user || !currentList) return;
+    if (action === 'nova') {
+      // Criar nova lista
+      const { data: newList, error: createError } = await supabase
+        .from('shopping_lists')
+        .insert({ name: currentList.name || 'Lista de Compras', user_id: user.data.user.id })
+        .select()
+        .single();
+      if (!createError && newList) {
+        // Copiar itens da lista atual para a nova
+        if (listItems.length > 0) {
+          const itemsToInsert = listItems.map(item => ({
+            list_id: newList.id,
+            product_id: item.product_id,
+            custom_product_name: item.custom_product_name,
+            quantity: item.quantity,
+            is_checked: item.is_checked
+          }));
+          await supabase.from('list_items').insert(itemsToInsert);
+        }
+        setCurrentList(newList);
+        localStorage.setItem('shoppingListId', newList.id);
+        toast({ title: 'Nova lista criada!', description: 'Sua lista foi salva como nova.' });
+        fetchUserLists();
+      }
+    } else {
+      // Atualizar lista existente
+      await supabase
+        .from('shopping_lists')
+        .update({ name: currentList.name || 'Lista de Compras', user_id: user.data.user.id })
+        .eq('id', currentList.id);
+      toast({ title: 'Lista salva!', description: 'Sua lista foi atualizada.' });
+      fetchUserLists();
+    }
+  };
+
+  // Carregar lista selecionada
+  const handleLoadList = (list: ShoppingListType) => {
+    setCurrentList(list);
+    localStorage.setItem('shoppingListId', list.id);
+    setShowListsMenu(false);
+  };
+
+  // Buscar lista do localStorage ou criar nova
+  useEffect(() => {
+    const fetchOrCreateList = async () => {
+      setIsLoadingList(true);
+      const savedListId = localStorage.getItem('shoppingListId');
+      if (savedListId) {
+        // Tentar buscar a lista no banco
+        const { data: list, error } = await supabase
+          .from('shopping_lists')
+          .select('*')
+          .eq('id', savedListId)
+          .single();
+        if (list && !list.is_completed) {
+          setCurrentList(list);
+          setIsLoadingList(false);
+          return;
+        } else {
+          // Se não existe ou está concluída, remove do localStorage
+          localStorage.removeItem('shoppingListId');
+        }
+      }
+      // Criar nova lista
+      const { data: newList, error: createError } = await supabase
+        .from('shopping_lists')
+        .insert([{ name: 'Lista de Compras' }])
+        .select()
+        .single();
+      if (!createError && newList) {
+        setCurrentList(newList);
+        localStorage.setItem('shoppingListId', newList.id);
+      }
+      setIsLoadingList(false);
+    };
+    fetchOrCreateList();
   }, []);
+
+  // Buscar produtos similares ao digitar
+  useEffect(() => {
+    if (!customProduct.trim()) {
+      setSimilarProducts([]);
+      setShowCategorySelect(false);
+      return;
+    }
+    const search = normalize(customProduct.trim());
+    // Buscar em todas as categorias
+    (async () => {
+      const { data: allProducts } = await supabase.from('products').select('*');
+      if (allProducts) {
+        const similars = allProducts.filter((p: Product) => normalize(p.name).includes(search));
+        setSimilarProducts(similars);
+        setShowCategorySelect(similars.length === 0);
+      }
+    })();
+  }, [customProduct]);
 
   const createNewList = async () => {
     try {
@@ -152,9 +303,9 @@ const ShoppingList = () => {
         .insert([{ name: 'Lista de Compras' }])
         .select()
         .single();
-      
       if (error) throw error;
       setCurrentList(data);
+      localStorage.setItem('shoppingListId', data.id);
     } catch (error) {
       toast({
         title: "Erro",
@@ -174,17 +325,16 @@ const ShoppingList = () => {
       // Se é um produto personalizado, criar/encontrar o produto no banco
       if (customName && !productId) {
         const formattedName = capitalizeWords(customName.trim());
-        const detectedCategoryId = detectCategory(formattedName, categories);
+        const detectedCategoryId = manualCategory || detectCategory(formattedName, categories);
         
-        // Verificar se o produto já existe
+        // Verificar se o produto já existe (case-insensitive, sem acento)
         const { data: existingProduct } = await supabase
           .from('products')
           .select('id')
-          .eq('name', formattedName)
-          .single();
+          .ilike('name', formattedName);
         
-        if (existingProduct) {
-          finalProductId = existingProduct.id;
+        if (existingProduct && existingProduct.length > 0) {
+          finalProductId = existingProduct[0].id;
         } else {
           // Criar novo produto
           const { data: newProduct, error: createError } = await supabase
@@ -243,6 +393,9 @@ const ShoppingList = () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setCustomProduct('');
       setSelectedCategory(null);
+      setManualCategory(null);
+      setShowCategorySelect(false);
+      setSimilarProducts([]);
       toast({
         title: "Sucesso",
         description: "Produto adicionado à lista!"
@@ -323,21 +476,150 @@ const ShoppingList = () => {
   const checkedItems = listItems.filter(item => item.is_checked);
   const uncheckedItems = listItems.filter(item => !item.is_checked);
 
+  // Editar nome da lista
+  const handleEditList = (list: ShoppingListType) => {
+    setEditingListId(list.id);
+    setEditingListName(list.name || '');
+  };
+  const handleSaveEditList = async (list: ShoppingListType) => {
+    await supabase
+      .from('shopping_lists')
+      .update({ name: editingListName })
+      .eq('id', list.id);
+    setEditingListId(null);
+    fetchUserLists();
+  };
+  const handleDeleteList = async (list: ShoppingListType) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta lista? Essa ação não pode ser desfeita.')) return;
+    await supabase
+      .from('shopping_lists')
+      .delete()
+      .eq('id', list.id);
+    fetchUserLists();
+    // Se deletou a lista atual, limpa do localStorage e recarrega
+    if (currentList?.id === list.id) {
+      localStorage.removeItem('shoppingListId');
+      window.location.reload();
+    }
+  };
+
+  // Função para formatar data
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  // Função para gerar link de compartilhamento
+  const getShareUrl = () => {
+    if (!currentList) return window.location.href;
+    return `${window.location.origin}/?list=${currentList.id}`;
+  };
+
+  // Função para copiar link
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(getShareUrl());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Função para compartilhar no WhatsApp
+  const handleShareWhatsApp = () => {
+    const url = getShareUrl();
+    const text = encodeURIComponent(`Confira minha lista de compras: ${url}`);
+    window.open(`https://wa.me/?text=${text}`, '_blank');
+  };
+
+  // Renderização condicional para loading
+  if (isLoadingList || !currentList) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <span>Carregando lista...</span>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShoppingCart className="h-6 w-6 text-green-600" />
-              <h1 className="text-xl font-bold text-gray-900">Lista de Compras</h1>
-            </div>
-            <div className="text-sm text-gray-500">
-              {listItems.length} {listItems.length === 1 ? 'item' : 'itens'}
-            </div>
-          </div>
+      {/* Menu superior */}
+      <div className="bg-white shadow-sm border-b sticky top-0 z-20 flex flex-col gap-2 md:flex-row md:items-center md:justify-between px-4 py-4">
+        <div className="flex items-center gap-2">
+          <ShoppingCart className="h-6 w-6 text-green-600" />
+          <h1 className="text-xl font-bold text-gray-900">Lista de Compras</h1>
         </div>
+        {/* Busca global de produtos - destaque */}
+        <div className="w-full md:w-[480px] mx-auto relative order-3 md:order-none">
+          <Input
+            placeholder="Buscar produto em todo o mercado..."
+            value={globalSearch}
+            onChange={e => setGlobalSearch(e.target.value)}
+            className="pl-10 text-lg border-2 border-green-500 shadow-lg focus:ring-4 focus:ring-green-200 transition h-14 font-semibold bg-green-50 placeholder:text-green-700"
+          />
+          {globalResults.length > 0 && (
+            <div className="absolute left-0 right-0 top-16 bg-white border rounded shadow-lg z-30 max-h-60 overflow-auto">
+              {globalResults.map(prod => (
+                <button
+                  key={prod.id}
+                  className="w-full text-left px-4 py-2 hover:bg-green-50 flex items-center justify-between"
+                  onClick={() => addProductMutation.mutate({ productId: prod.id })}
+                >
+                  <span>{prod.name}</span>
+                  <Plus className="w-4 h-4 text-green-600" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Botão Compartilhar Lista - só ícone, sutil */}
+        <button
+          className="flex items-center justify-center text-gray-500 hover:text-blue-600 p-2 rounded-full border border-transparent hover:border-blue-200 bg-transparent transition order-2 md:order-none"
+          onClick={() => setShowShareDialog(true)}
+          title="Compartilhar Lista"
+        >
+          <Share2 className="w-6 h-6" />
+        </button>
+        <button
+          className="flex items-center gap-1 text-green-700 hover:text-green-900 font-semibold px-3 py-1 rounded border border-green-100 bg-green-50 hover:bg-green-100 transition"
+          onClick={() => { fetchUserLists(); setShowListsMenu((v) => !v); }}
+        >
+          <List className="w-5 h-5" /> Minhas Listas
+        </button>
+        {/* Menu dropdown de listas */}
+        {showListsMenu && (
+          <div className="absolute right-4 top-16 bg-white border rounded shadow-lg z-30 w-80 max-h-96 overflow-auto">
+            <div className="p-2 font-bold border-b">Minhas Listas</div>
+            {userLists.length === 0 && <div className="p-2 text-gray-500">Nenhuma lista encontrada</div>}
+            {userLists.map(list => (
+              <div key={list.id} className={`flex items-center gap-2 px-4 py-2 border-b last:border-b-0 ${currentList?.id === list.id ? 'bg-green-100 font-bold' : ''}`}> 
+                {editingListId === list.id ? (
+                  <>
+                    <input
+                      className="flex-1 border rounded p-1 text-sm"
+                      value={editingListName}
+                      onChange={e => setEditingListName(e.target.value)}
+                      autoFocus
+                    />
+                    <button className="text-green-600 hover:text-green-800" onClick={() => handleSaveEditList(list)}><Check className="w-4 h-4" /></button>
+                    <button className="text-gray-400 hover:text-red-500" onClick={() => setEditingListId(null)}><X className="w-4 h-4" /></button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="flex-1 text-left truncate"
+                      onClick={() => handleLoadList(list)}
+                    >
+                      {list.name || 'Lista de Compras'}
+                      {list.is_completed && <span className="ml-2 text-xs text-gray-400">(concluída)</span>}
+                      <div className="text-xs text-gray-400">{formatDate(list.created_at)}</div>
+                    </button>
+                    <button className="text-blue-600 hover:text-blue-800" onClick={() => handleEditList(list)} title="Editar"><Edit className="w-4 h-4" /></button>
+                    <button className="text-red-600 hover:text-red-800" onClick={() => handleDeleteList(list)} title="Excluir"><Trash2 className="w-4 h-4" /></button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="px-4 py-4 space-y-4">
@@ -377,7 +659,7 @@ const ShoppingList = () => {
                   <div className="flex items-center gap-2">
                     <span>{product.name}</span>
                     {product.user_suggested && (
-                      <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                      <User className="h-3 w-3 text-blue-500" />
                     )}
                   </div>
                   <Plus className="h-4 w-4" />
@@ -402,12 +684,42 @@ const ShoppingList = () => {
             />
             <Button
               onClick={() => addProductMutation.mutate({ customName: customProduct })}
-              disabled={!customProduct.trim() || addProductMutation.isPending}
+              disabled={!customProduct.trim() || addProductMutation.isPending || (similarProducts.length > 0)}
               size="sm"
             >
               <Plus className="h-4 w-4" />
             </Button>
           </div>
+          {/* Sugestões de produtos similares */}
+          {similarProducts.length > 0 && (
+            <div className="mt-2">
+              <div className="text-xs text-gray-600 mb-1">Produtos similares encontrados:</div>
+              <div className="flex flex-wrap gap-2">
+                {similarProducts.map((prod) => (
+                  <Button key={prod.id} size="sm" variant="outline" onClick={() => addProductMutation.mutate({ productId: prod.id })}>
+                    {prod.name}
+                  </Button>
+                ))}
+              </div>
+              <div className="text-xs text-gray-500 mt-2">Se não encontrou, continue digitando para cadastrar novo produto.</div>
+            </div>
+          )}
+          {/* Seleção manual de categoria */}
+          {showCategorySelect && (
+            <div className="mt-2">
+              <Label className="text-xs">Categoria:</Label>
+              <select
+                className="block w-full border rounded p-1 mt-1"
+                value={manualCategory || ''}
+                onChange={e => setManualCategory(e.target.value)}
+              >
+                <option value="">Selecione a categoria</option>
+                {categories.map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.icon} {cat.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Lista de compras */}
@@ -432,7 +744,7 @@ const ShoppingList = () => {
                             {item.product?.name || item.custom_product_name}
                           </span>
                           {item.product?.user_suggested && (
-                            <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                            <User className="h-3 w-3 text-blue-500" />
                           )}
                         </div>
                       </div>
@@ -498,7 +810,7 @@ const ShoppingList = () => {
                               {item.product?.name || item.custom_product_name}
                             </span>
                             {item.product?.user_suggested && (
-                              <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                              <User className="h-3 w-3 text-blue-500" />
                             )}
                           </div>
                         </div>
@@ -515,6 +827,15 @@ const ShoppingList = () => {
         {/* Finalizar compra */}
         {listItems.length > 0 && (
           <div className="bg-white rounded-lg p-4 shadow-sm">
+            {/* Botão Salvar Lista */}
+            <Button
+              onClick={handleSaveList}
+              className="w-full mb-2 bg-blue-600 hover:bg-blue-700"
+              size="lg"
+              variant="default"
+            >
+              <Save className="h-4 w-4 mr-2" /> Salvar Lista
+            </Button>
             {!showCompleteForm ? (
               <Button
                 onClick={() => setShowCompleteForm(true)}
@@ -556,6 +877,52 @@ const ShoppingList = () => {
           </div>
         )}
       </div>
+
+      {/* Modal de confirmação para salvar lista */}
+      <AlertDialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Como deseja salvar sua lista?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Você pode criar uma nova lista (duplicando os itens atuais) ou atualizar a lista existente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => handleSaveDialogAction('nova')}>Criar Nova Lista</AlertDialogAction>
+            <AlertDialogAction onClick={() => handleSaveDialogAction('existente')}>Salvar Existente</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de compartilhamento */}
+      <AlertDialog open={showShareDialog} onOpenChange={setShowShareDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Compartilhar Lista</AlertDialogTitle>
+            <AlertDialogDescription>
+              Compartilhe sua lista de compras com outras pessoas!
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex flex-col gap-3 mt-2">
+            <button
+              className="w-full flex items-center gap-2 bg-gray-100 hover:bg-gray-200 rounded p-2 font-semibold justify-center"
+              onClick={handleCopyLink}
+            >
+              {copied ? 'Link copiado!' : 'Copiar link da lista'}
+            </button>
+            <button
+              className="w-full flex items-center gap-2 bg-green-100 hover:bg-green-200 rounded p-2 font-semibold justify-center text-green-800"
+              onClick={handleShareWhatsApp}
+            >
+              Compartilhar no WhatsApp
+            </button>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Fechar</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

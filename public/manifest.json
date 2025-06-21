@@ -1,0 +1,16 @@
+{
+  "name": "Lista de Mercado",
+  "short_name": "Mercado",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f0fdf4",
+  "theme_color": "#16a34a",
+  "description": "Gerencie suas listas de compras de forma fácil e rápida!",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+} 
