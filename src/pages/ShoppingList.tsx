@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -141,7 +140,14 @@ const ShoppingList = () => {
       
       // Atualizar contador de uso do produto
       if (productId) {
-        await supabase.rpc('increment_usage_count', { product_id: productId });
+        const { error: rpcError } = await supabase
+          .from('products')
+          .update({ usage_count: supabase.sql`usage_count + 1` })
+          .eq('id', productId);
+        
+        if (rpcError) {
+          console.error('Erro ao atualizar contador:', rpcError);
+        }
       }
       
       return data;
