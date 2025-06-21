@@ -9,7 +9,134 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
-      [_ in never]: never
+      categories: {
+        Row: {
+          created_at: string
+          icon: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          icon?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          icon?: string | null
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      list_items: {
+        Row: {
+          created_at: string
+          custom_product_name: string | null
+          id: string
+          is_checked: boolean | null
+          list_id: string | null
+          product_id: string | null
+          quantity: number | null
+        }
+        Insert: {
+          created_at?: string
+          custom_product_name?: string | null
+          id?: string
+          is_checked?: boolean | null
+          list_id?: string | null
+          product_id?: string | null
+          quantity?: number | null
+        }
+        Update: {
+          created_at?: string
+          custom_product_name?: string | null
+          id?: string
+          is_checked?: boolean | null
+          list_id?: string | null
+          product_id?: string | null
+          quantity?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "list_items_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "shopping_lists"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "list_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      products: {
+        Row: {
+          category_id: string | null
+          created_at: string
+          id: string
+          name: string
+          usage_count: number | null
+        }
+        Insert: {
+          category_id?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          usage_count?: number | null
+        }
+        Update: {
+          category_id?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          usage_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "products_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      shopping_lists: {
+        Row: {
+          completion_date: string | null
+          created_at: string
+          id: string
+          is_completed: boolean | null
+          name: string
+          store_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          completion_date?: string | null
+          created_at?: string
+          id?: string
+          is_completed?: boolean | null
+          name?: string
+          store_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          completion_date?: string | null
+          created_at?: string
+          id?: string
+          is_completed?: boolean | null
+          name?: string
+          store_name?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
