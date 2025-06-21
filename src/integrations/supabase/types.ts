@@ -82,6 +82,7 @@ export type Database = {
           id: string
           name: string
           usage_count: number | null
+          user_suggested: boolean | null
         }
         Insert: {
           category_id?: string | null
@@ -89,6 +90,7 @@ export type Database = {
           id?: string
           name: string
           usage_count?: number | null
+          user_suggested?: boolean | null
         }
         Update: {
           category_id?: string | null
@@ -96,6 +98,7 @@ export type Database = {
           id?: string
           name?: string
           usage_count?: number | null
+          user_suggested?: boolean | null
         }
         Relationships: [
           {

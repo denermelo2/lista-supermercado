@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -6,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Minus, ShoppingCart, Check, X } from 'lucide-react';
+import { Plus, Minus, ShoppingCart, Check, X, User } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 interface Category {
@@ -20,6 +21,7 @@ interface Product {
   name: string;
   category_id: string;
   usage_count: number;
+  user_suggested?: boolean;
 }
 
 interface ListItem {
@@ -39,6 +41,47 @@ interface ShoppingListType {
   completion_date?: string;
   store_name?: string;
 }
+
+// Função para capitalizar a primeira letra de cada palavra
+const capitalizeWords = (str: string): string => {
+  return str
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+// Função para detectar categoria baseada no nome do produto
+const detectCategory = (productName: string, categories: Category[]): string | null => {
+  const name = productName.toLowerCase();
+  
+  // Mapeamento de palavras-chave para categorias
+  const categoryKeywords = {
+    'Frutas e Verduras': ['fruta', 'verdura', 'legume', 'banana', 'maçã', 'tomate', 'alface', 'cebola', 'batata', 'laranja', 'cenoura', 'abobrinha', 'brócolis'],
+    'Carnes e Peixes': ['carne', 'frango', 'peixe', 'linguiça', 'bisteca', 'salmão', 'ovos', 'ovo'],
+    'Laticínios': ['leite', 'queijo', 'iogurte', 'requeijão', 'manteiga', 'creme'],
+    'Padaria': ['pão', 'baguete'],
+    'Bebidas': ['água', 'refrigerante', 'suco', 'cerveja', 'café', 'bebida'],
+    'Limpeza': ['detergente', 'sabão', 'sanitária', 'desinfetante', 'esponja', 'limpeza'],
+    'Higiene': ['papel higiênico', 'sabonete', 'creme dental', 'shampoo', 'desodorante', 'higiene'],
+    'Congelados': ['congelado', 'congelada'],
+    'Enlatados': ['conserva', 'lata', 'atum', 'molho'],
+    'Cereais e Grãos': ['arroz', 'feijão', 'açúcar', 'farinha', 'macarrão', 'cereal'],
+    'Mercearia': ['óleo', 'sal', 'vinagre', 'azeite', 'maionese'],
+    'Pet Shop': ['ração', 'pet', 'cão', 'gato', 'cachorro']
+  };
+
+  for (const [categoryName, keywords] of Object.entries(categoryKeywords)) {
+    if (keywords.some(keyword => name.includes(keyword))) {
+      const category = categories.find(cat => cat.name === categoryName);
+      return category?.id || null;
+    }
+  }
+
+  // Se não encontrar categoria específica, retorna "Mercearia" como padrão
+  const merceariaCategory = categories.find(cat => cat.name === 'Mercearia');
+  return merceariaCategory?.id || null;
+};
 
 const ShoppingList = () => {
   const [currentList, setCurrentList] = useState<ShoppingListType | null>(null);
@@ -126,12 +169,46 @@ const ShoppingList = () => {
     mutationFn: async ({ productId, customName }: { productId?: string; customName?: string }) => {
       if (!currentList?.id) throw new Error('Nenhuma lista ativa');
       
+      let finalProductId = productId;
+      
+      // Se é um produto personalizado, criar/encontrar o produto no banco
+      if (customName && !productId) {
+        const formattedName = capitalizeWords(customName.trim());
+        const detectedCategoryId = detectCategory(formattedName, categories);
+        
+        // Verificar se o produto já existe
+        const { data: existingProduct } = await supabase
+          .from('products')
+          .select('id')
+          .eq('name', formattedName)
+          .single();
+        
+        if (existingProduct) {
+          finalProductId = existingProduct.id;
+        } else {
+          // Criar novo produto
+          const { data: newProduct, error: createError } = await supabase
+            .from('products')
+            .insert([{
+              name: formattedName,
+              category_id: detectedCategoryId,
+              usage_count: 1,
+              user_suggested: true
+            }])
+            .select()
+            .single();
+          
+          if (createError) throw createError;
+          finalProductId = newProduct.id;
+        }
+      }
+      
       const { data, error } = await supabase
         .from('list_items')
         .insert([{
           list_id: currentList.id,
-          product_id: productId,
-          custom_product_name: customName,
+          product_id: finalProductId,
+          custom_product_name: finalProductId ? null : customName,
           quantity: 1
         }])
         .select();
@@ -139,19 +216,19 @@ const ShoppingList = () => {
       if (error) throw error;
       
       // Atualizar contador de uso do produto
-      if (productId) {
+      if (finalProductId) {
         // Buscar o produto atual para obter o usage_count
         const { data: product, error: fetchError } = await supabase
           .from('products')
           .select('usage_count')
-          .eq('id', productId)
+          .eq('id', finalProductId)
           .single();
         
         if (!fetchError && product) {
           const { error: updateError } = await supabase
             .from('products')
             .update({ usage_count: product.usage_count + 1 })
-            .eq('id', productId);
+            .eq('id', finalProductId);
           
           if (updateError) {
             console.error('Erro ao atualizar contador:', updateError);
@@ -297,7 +374,12 @@ const ShoppingList = () => {
                   className="justify-between"
                   disabled={addProductMutation.isPending}
                 >
-                  <span>{product.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span>{product.name}</span>
+                    {product.user_suggested && (
+                      <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                    )}
+                  </div>
                   <Plus className="h-4 w-4" />
                 </Button>
               ))}
@@ -345,9 +427,14 @@ const ShoppingList = () => {
                         }
                       />
                       <div className="flex-1">
-                        <span className="text-sm font-medium">
-                          {item.product?.name || item.custom_product_name}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {item.product?.name || item.custom_product_name}
+                          </span>
+                          {item.product?.user_suggested && (
+                            <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1">
                         <Button
@@ -406,9 +493,14 @@ const ShoppingList = () => {
                           }
                         />
                         <div className="flex-1">
-                          <span className="text-sm line-through">
-                            {item.product?.name || item.custom_product_name}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm line-through">
+                              {item.product?.name || item.custom_product_name}
+                            </span>
+                            {item.product?.user_suggested && (
+                              <User className="h-3 w-3 text-blue-500" title="Sugerido por usuário" />
+                            )}
+                          </div>
                         </div>
                         <span className="text-sm text-gray-500">{item.quantity}</span>
                       </div>
