@@ -140,13 +140,22 @@ const ShoppingList = () => {
       
       // Atualizar contador de uso do produto
       if (productId) {
-        const { error: rpcError } = await supabase
+        // Buscar o produto atual para obter o usage_count
+        const { data: product, error: fetchError } = await supabase
           .from('products')
-          .update({ usage_count: supabase.sql`usage_count + 1` })
-          .eq('id', productId);
+          .select('usage_count')
+          .eq('id', productId)
+          .single();
         
-        if (rpcError) {
-          console.error('Erro ao atualizar contador:', rpcError);
+        if (!fetchError && product) {
+          const { error: updateError } = await supabase
+            .from('products')
+            .update({ usage_count: product.usage_count + 1 })
+            .eq('id', productId);
+          
+          if (updateError) {
+            console.error('Erro ao atualizar contador:', updateError);
+          }
         }
       }
       
